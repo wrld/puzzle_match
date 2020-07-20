@@ -26,29 +26,14 @@ int main(int argc, char** argv) {
     cout << "No exist" << endl;
     return -1;
   }
-
   PuzzleMatch st;
   cout << "param init" << endl;
   st.Init(scene, background, full);
-  clock_t start, end;
-  start = clock();
-  Rect box_target = st.getROI(full, 1)[0];
-  vector<Rect> ROIs_template = st.getROI(scene, 0);
-  full = full(box_target);
+  st.box_target = st.getROI(full, 1)[0];
+  full = full(st.box_target);
   Ptr<Feature2D> sift = xfeatures2d::SIFT::create(0, 1, 0.04, 10, 1.6);
-  vector<KeyPoint> keypoints;
-  Mat descriptors;
-  sift->detect(full, keypoints);
-  sift->compute(full, keypoints, descriptors);
 
-  for (auto roi : ROIs_template) {
-    Mat single = scene(roi);
-    st.featurematch(single, full, keypoints, descriptors, roi, box_target);
-    st.stitchImage(single, full);
-  }
-  end = clock();
-  double endtime = (double)(end - start) / CLOCKS_PER_SEC;
-  cout << "Total time:" << end << "  " << start << "  " << endtime << "s"
-       << endl;  // s为单位
-  waitKey(0);
+  sift->detect(full, st.keypoints);
+  sift->compute(full, st.keypoints, st.descriptors);
+  st.mainloop();
 }

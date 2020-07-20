@@ -1,6 +1,11 @@
+#include <cv_bridge/cv_bridge.h>
+#include <image_transport/image_transport.h>
+#include <math.h>
 #include <ros/ros.h>
+#include <sensor_msgs/image_encodings.h>
 #include <stdio.h>
 
+#include <Eigen/Core>
 #include <algorithm>
 #include <boost/format.hpp>
 #include <ctime>
@@ -16,6 +21,7 @@
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/xfeatures2d.hpp"
+#include "pm_msg/pose.h"
 using namespace cv;
 using namespace std;
 
@@ -25,9 +31,9 @@ class PuzzleMatch {
   PuzzleMatch();
 
   // ~PuzzleMatch();
-  Mat scene, background, full;
+  Mat scene, background, full, full_;
   vector<double> dist;
-  int feature_method = 1;
+  double height = 0.6;
   //! Intrinsic parameters
   Mat M1, D1, M2, D2;
   Mat img_l, img_r;
@@ -36,18 +42,25 @@ class PuzzleMatch {
   //! disparity map and depth map
   cv::Mat disp, disp8, depth;
   Mat pic_l, pic_r;
-
+  pm_msg::pose poses;
+  ros::Publisher pose_pub;
   typedef struct {
     Point2f left_top;
     Point2f left_bottom;
     Point2f right_top;
     Point2f right_bottom;
   } four_corners_t;
-
+  double result_angle;
   four_corners_t corners;
   cv::Mat1f camera_matrix;
   Mat distortion_coefficients;
   Mat transH;
+  Rect box_target;
+  image_transport::Subscriber camera_subscriber;
+  vector<KeyPoint> keypoints;
+  Mat descriptors;
+  void imageCallback(const sensor_msgs::ImageConstPtr& msg);
+  void mainloop();
   void Init(Mat scene, Mat background, Mat full);
   vector<Rect> getROI(Mat image, bool show);
   void featurematch(Mat src1, Mat src2, vector<KeyPoint> keypoints2,

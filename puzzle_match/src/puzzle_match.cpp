@@ -13,8 +13,24 @@ void PuzzleMatch::Init(Mat scene, Mat background, Mat full) {
   this->background = background;
   this->full = full;
   float f = 1, w = scene.cols, h = scene.rows;
+  ros::NodeHandle nh;
+  image_transport::ImageTransport it(nh);
+  camera_subscriber = it.subscribe("/video_pub/image_track", 1,
+                                   &PuzzleMatch::imageCallback, this);
+  pose_pub = nh.advertise<pm_msg::pose>("puzzle_match/pose", 30);
 
   camera_matrix = (cv::Mat1f(3, 3) << f, 0, w / 2, 0, f, h / 2, 0, 0, 1);
+  box_target = getROI(full, 1)[0];
+  full_ = full(box_target);
+  Ptr<Feature2D> sift = xfeatures2d::SIFT::create(0, 1, 0.04, 10, 1.6);
+
+  sift->detect(full_, keypoints);
+  sift->compute(full_, keypoints, descriptors);
+}
+
+void PuzzleMatch::imageCallback(const sensor_msgs::ImageConstPtr& msg) {
+  Mat frame = cv_bridge::toCvShare(msg, "bgr8")->image;
+  this->scene = frame.clone();
 }
 
 void PuzzleMatch::find_feature_matches(const Mat& img_1, const Mat& img_2,
@@ -172,25 +188,11 @@ void PuzzleMatch::featurematch(Mat src1, Mat src2, vector<KeyPoint> keypoints2,
   for (int i = 0; i < knn_matches.size(); i++) {
     if (knn_matches[i][0].distance < 0.5 * knn_matches[i][1].distance)
       good_matches.push_back(knn_matches[i][0]);
-    // if (dist < min_dist) min_dist = dist;
-    // if (dist > max_dist) max_dist = dist;
   }
-  // 当描述子之间的匹配大于2倍的最小距离时，即认为该匹配是一个错误的匹配。
-  // 但有时描述子之间的最小距离非常小，可以设置一个经验值作为下限
-  //   cout << min_dist << endl;
-
-  //   for (int i = 0; i < descriptors1.rows; i++) {
-  //     if (matches[i].distance <= max(3 * min_dist, 100.0))
-  //       good_matches.push_back(matches[i]);
-  //   }
   matches.clear();
   matches = good_matches;
   Mat img;
   drawMatches(src1, keypoints1, src2, keypoints2, matches, img);
-  //   resize(img, img, Size(img.cols * 0.2, img.rows * 0.2));
-  //   imshow("match1", img);
-  //   waitKey(2000);
-
   vector<Point2f> pic1, pic2;  //滤掉误匹配点
   for (int i = 0; i < matches.size(); i++) {
     pic1.push_back(Point2f(keypoints1[matches[i].queryIdx].pt.x + roi.tl().x,
@@ -200,45 +202,45 @@ void PuzzleMatch::featurematch(Mat src1, Mat src2, vector<KeyPoint> keypoints2,
                 keypoints2[matches[i].trainIdx].pt.y + roi_full.tl().y));
   }
   vector<unsigned char> mark(pic1.size());
-  //   for (auto p : pic2) circle(this->full, p, 1, Scalar(0, 255, 0));
-  //   for (auto p : pic1) circle(this->scene, p, 1, Scalar(0, 255, 0));
-  //   imshow("full", this->full);
-  //   imshow("scene", this->scene);
-  //   waitKey(0);
-  // find homography for right to left
   transH = findHomography(pic1, pic2, CV_RANSAC, 5, mark, 500);
   // find essential mat for right to left
   Mat E = cv::findEssentialMat(pic1, pic2, camera_matrix, CV_RANSAC);
   cv::Mat R1, R2, t;
-  cv::decomposeEssentialMat(E, R1, R2, t);
+  std::vector<cv::Mat> Rs, Ts;
+  //   cv::decomposeEssentialMat(E, R1, R2, t);
   cout << "camera_matrix" << camera_matrix << endl;
-  decomposeHomographyMat(transH, camera_matrix, R1, t, noArray());
-  this->R = R1.clone();
-  this->T = t.clone();
-  Mat origin_angle = Mat::zeros(3, 1, CV_32FC1);
-  Mat RR = Mat::zeros(3, 3, CV_32FC1);
+  decomposeHomographyMat(transH, camera_matrix, Rs, Ts, noArray());
+  //   this->R = R1.clone();
+  //   this->T = t.clone();
+  std::cout << "-------------------------------------------\n";
+  std::cout << "Estimated decomposition:\n\n";
+  std::cout << "rvec = " << std::endl;
+  for (auto R_ : Rs) {
+    cv::Mat1d rvec;
+    cv::Rodrigues(R_, rvec);
+    rvec = rvec * 180 / CV_PI;
+    if (fabs(rvec.at<double>(0) - 0) < 5) result_angle = rvec.at<double>(2);
+  }
 
-  origin_angle.at<float>(0, 0) = 1;
-  origin_angle.at<float>(1, 0) = 0;
-  origin_angle.at<float>(2, 0) = 0;
-  RR.at<float>(0, 0) = R.at<Vec3b>(0, 0)[0];
-  RR.at<float>(0, 1) = R.at<Vec3b>(0, 1)[0];
-  RR.at<float>(0, 2) = R.at<Vec3b>(0, 2)[0];
-  RR.at<float>(1, 0) = R.at<Vec3b>(1, 0)[0];
-  RR.at<float>(1, 1) = R.at<Vec3b>(1, 1)[0];
-  RR.at<float>(1, 2) = R.at<Vec3b>(1, 2)[0];
-  RR.at<float>(2, 0) = R.at<Vec3b>(2, 0)[0];
-  RR.at<float>(2, 1) = R.at<Vec3b>(2, 1)[0];
-  RR.at<float>(2, 2) = R.at<Vec3b>(2, 2)[0];
-  Mat target_vector;
-  target_vector = RR * origin_angle;
-  cout << "origin_angle" << origin_angle << endl;
-  cout << "target_vector" << target_vector << endl;
-  cout << "transH" << transH << endl;
-  cout << "R" << R << endl;
-  //   cout << "yaw" << yaw / CV_PI * 180 << endl;
-  cout << "T" << T << endl;
-  // pose_estimation_2d2d(keypoints1, keypoints2, matches, R1, t);
+  Mat origin_pos = cv::Mat1f(3, 1)
+                   << (roi.x + roi.width / 2, roi.y + roi.height / 2, 1);
+  Mat camera_pos, camera_matrix_reverse;
+  invert(camera_matrix, camera_matrix_reverse);
+  camera_pos = height * camera_matrix_reverse * origin_pos;
+
+  poses.target_angle = result_angle;
+  poses.target_pos[0] = camera_pos.at<double>(0);
+  poses.target_pos[1] = camera_pos.at<double>(1);
+  poses.target_index[0] = floor(pic2.back().x / roi.width) + 1;
+  poses.target_index[1] = floor(pic2.back().y / roi.height) + 1;
+  pose_pub.publish(poses);
+  cout << "camera_pos" << camera_pos << endl;
+  cout << "sum x: " << src2.cols / roi.width + 1 << "  at  "
+       << poses.target_index[0] << endl;
+  cout << "sum y: " << src2.rows / roi.height + 1 << "  at  "
+       << poses.target_index[1] << endl;
+
+  cout << "result_angle" << result_angle << endl;
 }
 
 void PuzzleMatch::stitchImage(Mat src1, Mat src2) {
@@ -249,7 +251,7 @@ void PuzzleMatch::stitchImage(Mat src1, Mat src2) {
   matchP = matchP + tempP;
   resize(matchP, matchP, Size(matchP.cols * 0.6, matchP.rows * 0.6));
   imshow("result", matchP);
-  waitKey(2000);
+  waitKey(10000);
   //   imwrite("/home/gjx/ROS/puzzle_match/src/puzzle_match/result/result.jpg",
   //           matchP);
 }
@@ -278,4 +280,22 @@ vector<Rect> PuzzleMatch::getROI(Mat image, bool show) {
   }
   //   if (show) imshow("roi_result", image);
   return bbox;
+}
+void PuzzleMatch::mainloop() {
+  ros::Rate loop_rate_class(10);
+  while (ros::ok()) {
+    clock_t start, end;
+    start = clock();
+    ros::spinOnce();
+    vector<Rect> ROIs_template = getROI(scene, 0);
+    for (auto roi : ROIs_template) {
+      Mat single = scene(roi);
+      featurematch(single, full_, keypoints, descriptors, roi, box_target);
+      // stitchImage(single, full);
+    }
+    end = clock();
+    double endtime = (double)(end - start) / CLOCKS_PER_SEC;
+    cout << "Total time:" << end << "  " << start << "  " << endtime << "s"
+         << endl;  // s为单位
+  }
 }
