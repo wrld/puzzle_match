@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <master auto="start"/>
+  <node pkg="puzzle_match" name="puzzle_match" type="puzzle_match" output="screen">
+
+ </node>
+
+</launch> 
+
