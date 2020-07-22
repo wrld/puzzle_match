@@ -7,6 +7,8 @@ project(puzzle_match)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
+find_package(Eigen3 3.1.0 REQUIRED) # 添加 2
+include_directories(${Eigen_INCLUDE_DIRS}) # 添加3
 
 find_package(OpenCV REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
@@ -18,6 +20,8 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   image_transport
 )
+find_package(Ceres REQUIRED)
+include_directories(${CERES_INCLUDE_DIRS})
 message(STATUS "OpenCV library status:")
 message(STATUS "    version: ${OpenCV_VERSION}")
 message(STATUS "    libraries: ${OpenCV_LIBS}")
@@ -44,5 +48,6 @@ add_executable(puzzle_match
  )
 target_link_libraries(puzzle_match
   ${OpenCV_LIBS}
-  ${catkin_LIBRARIES})
+  ${catkin_LIBRARIES}
+  ${CERES_LIBRARIES})
 catkin_package()

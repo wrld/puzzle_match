@@ -20,6 +20,7 @@ void PuzzleMatch::Init(Mat scene, Mat background, Mat full) {
   pose_pub = nh.advertise<pm_msg::pose>("puzzle_match/pose", 30);
 
   camera_matrix = (cv::Mat1f(3, 3) << f, 0, w / 2, 0, f, h / 2, 0, 0, 1);
+  camera_matrix_2 << f, 0, w / 2, 0, f, h / 2, 0, 0, 1;
   box_target = getROI(full, 1)[0];
   full_ = full(box_target);
   Ptr<Feature2D> sift = xfeatures2d::SIFT::create(0, 1, 0.04, 10, 1.6);
@@ -201,36 +202,141 @@ void PuzzleMatch::featurematch(Mat src1, Mat src2, vector<KeyPoint> keypoints2,
         Point2f(keypoints2[matches[i].trainIdx].pt.x + roi_full.tl().x,
                 keypoints2[matches[i].trainIdx].pt.y + roi_full.tl().y));
   }
-  vector<unsigned char> mark(pic1.size());
-  transH = findHomography(pic1, pic2, CV_RANSAC, 5, mark, 500);
-  // find essential mat for right to left
-  Mat E = cv::findEssentialMat(pic1, pic2, camera_matrix, CV_RANSAC);
-  cv::Mat R1, R2, t;
-  std::vector<cv::Mat> Rs, Ts;
-  //   cv::decomposeEssentialMat(E, R1, R2, t);
-  cout << "camera_matrix" << camera_matrix << endl;
-  decomposeHomographyMat(transH, camera_matrix, Rs, Ts, noArray());
-  //   this->R = R1.clone();
-  //   this->T = t.clone();
-  std::cout << "-------------------------------------------\n";
-  std::cout << "Estimated decomposition:\n\n";
-  std::cout << "rvec = " << std::endl;
-  for (auto R_ : Rs) {
-    cv::Mat1d rvec;
-    cv::Rodrigues(R_, rvec);
-    rvec = rvec * 180 / CV_PI;
-    if (fabs(rvec.at<double>(0) - 0) < 5) result_angle = rvec.at<double>(2);
+  if (method == 0 || method == 3) {
+    vector<unsigned char> mark(pic1.size());
+    transH = findHomography(pic1, pic2, CV_RANSAC, 5, mark, 500);
+    // find essential mat for right to left
+    Mat E = cv::findEssentialMat(pic1, pic2, camera_matrix, CV_RANSAC);
+    cv::Mat R1, R2, t;
+    std::vector<cv::Mat> Rs, Ts;
+    //   cv::decomposeEssentialMat(E, R1, R2, t);
+
+    decomposeHomographyMat(transH, camera_matrix, Rs, Ts, noArray());
+
+    for (auto R_ : Rs) {
+      cv::Mat1d rvec;
+      cv::Rodrigues(R_, rvec);
+      rvec = rvec * 180 / CV_PI;
+      if (fabs(rvec.at<double>(0) - 0) < 5) result_angle = rvec.at<double>(2);
+    }
+    origin_pos << roi.x + roi.width / 2, roi.y + roi.height / 2, 1;
+    camera_pos = height * camera_matrix_2.inverse() * origin_pos;
+  }
+  if (method == 1 || method == 3) {
+    // cout << "start ransac" << endl;
+    int num = pic1.size();
+    // Matrix<float, Dynamic, Dynamic> pos_w(2, num);
+    // Matrix<float, Dynamic, Dynamic> pos_t(2, num);
+    // Eigen::Matrix<float, 2, num> pos_w;
+    // Eigen::Matrix<float, 2, num> pos_t;
+    // vector<Eigen::Matrix<float, 2, 2>> result_R;
+    // vector<Eigen::Matrix<float, 2, 1>> result_t;
+    Eigen::MatrixXf pos_w, pos_t;
+    pos_w = Eigen::Matrix<float, Dynamic, Dynamic>();
+    pos_w.resize(2, num);
+    pos_t = Eigen::Matrix<float, Dynamic, Dynamic>();
+    pos_t.resize(2, num);
+    // cout << "end resize" << endl;
+    for (int i = 0; i < num; i++) {
+      pos_t(0, i) = pic1[i].x;
+      pos_t(1, i) = pic1[i].y;
+      pos_w(0, i) = pic2[i].x;
+      pos_w(1, i) = pic2[i].y;
+    }
+    // cout << "initial end" << endl;
+    srand((int)time(0));
+    Eigen::Matrix<float, 2, 1> result_t;
+    double result_theta;
+    double result_cost = 0;
+    Eigen::Matrix<float, 2, 2> result_R;
+    int max_inlier = 0;
+    for (int i = 0; i < 20; i++) {
+      Eigen::Matrix<float, 2, 2> A;
+      Eigen::Matrix<float, 2, 1> B;
+      Eigen::Matrix<float, 2, 1> theta;
+      Eigen::Matrix<float, 2, 1> t;
+      Eigen::Matrix<float, 2, 2> R;
+      int inliers = 0;
+
+      int random1 = rand() % num;
+      int random2 = rand() % num;
+
+      A << -(pos_w(1, random1) - pos_w(1, random2)),
+          (pos_w(0, random1) - pos_w(0, random2)),
+          (pos_w(0, random1) - pos_w(0, random2)),
+          (pos_w(1, random1) - pos_w(1, random2));
+
+      B << pos_t(0, random1) - pos_t(0, random2),
+          pos_t(1, random1) - pos_t(1, random2);
+
+      theta = A.inverse() * B;
+
+      R << theta[1], -theta[0], theta[0], theta[1];
+      t = pos_t.col(random1) - R * pos_w.col(random1);
+
+      Eigen::Matrix<float, Dynamic, Dynamic> resdue(2, num);
+      Eigen::Matrix<float, Dynamic, Dynamic> cost(1, num);
+      resdue = R * pos_w + t.rowwise().replicate(num) - pos_t;
+
+      cost = resdue.transpose() * resdue;
+      for (int i = 0; i < num; i++)
+        if (sqrt(cost(0, i) < 0.002)) inliers++;
+
+      if (inliers > max_inlier) {
+        max_inlier = inliers;
+        result_t = t;
+        result_R = R;
+        result_theta = atan(theta[0] / theta[1]);
+        result_cost = cost.sum();
+      }
+    }
+    cout << "=====================================" << endl;
+    cout << "max inliers " << max_inlier << "sum" << num << endl;
+    cout << "result_theta " << result_theta << endl;
+    cout << "result_t " << result_t << endl;
+    cout << "result_cost " << result_cost << endl;
+    double initial[3] = {result_theta, result_t[0], result_t[1]};
+
+    Problem problem;
+
+    for (int i = 0; i < num; i++) {
+      problem
+          .AddResidualBlock(  // 向问题中添加误差项
+                              // 使用自动求导，模板参数：误差类型，输出维度，输入维度，维数要与前面struct中一致
+              new ceres::AutoDiffCostFunction<CURVE_FITTING_COST, 2, 3>(
+                  new CURVE_FITTING_COST(pos_t(0, i), pos_t(1, i), pos_w(0, i),
+                                         pos_w(1, i))),
+              nullptr,  // 核函数，这里不使用，为空
+              initial   // 待估计参数
+          );
+    }
+
+    ceres::Solver::Options options;
+    options.linear_solver_type = ceres::DENSE_QR;
+    options.minimizer_progress_to_stdout = true;
+
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+
+    // 输出结果
+    cout << summary.BriefReport() << endl;
+    result_angle = initial[0] * 180 / CV_PI;
+    Eigen::Matrix<float, 2, 1> final_t(initial[1], initial[2]);
+    Eigen::Matrix<float, 2, 2> final_R;
+    final_R << ceres::cos(initial[0]), -ceres::sin(initial[0]),
+        ceres::sin(initial[0]), ceres::cos(initial[0]);
+    // cout << "tx ty" << height * camera_matrix_2.inverse() * final_t << endl;
+    Eigen::Matrix<float, 2, 1> temp;
+    temp << roi.width * floor(pic2.back().x / roi.width) + roi.width / 2,
+        roi.height * floor(pic2.back().y / roi.height) + roi.height / 2;
+    temp = final_R * temp + final_t;
+    origin_pos << temp[0], temp[1], 1;
+    camera_pos = height * camera_matrix_2.inverse() * origin_pos;
   }
 
-  Mat origin_pos = cv::Mat1f(3, 1)
-                   << (roi.x + roi.width / 2, roi.y + roi.height / 2, 1);
-  Mat camera_pos, camera_matrix_reverse;
-  invert(camera_matrix, camera_matrix_reverse);
-  camera_pos = height * camera_matrix_reverse * origin_pos;
-
   poses.target_angle = result_angle;
-  poses.target_pos[0] = camera_pos.at<double>(0);
-  poses.target_pos[1] = camera_pos.at<double>(1);
+  poses.target_pos[0] = camera_pos[0];
+  poses.target_pos[1] = camera_pos[1];
   poses.target_index[0] = floor(pic2.back().x / roi.width) + 1;
   poses.target_index[1] = floor(pic2.back().y / roi.height) + 1;
   pose_pub.publish(poses);
